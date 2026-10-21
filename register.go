@@ -28,7 +28,7 @@ func registration(request []byte) (registrationPayload, error) {
 		SchemaVersion: pluginabi.SchemaVersion,
 		Metadata: pluginapi.Metadata{
 			Name:             providerID,
-			Version:          "0.1.0",
+			Version:          "0.1.1",
 			Author:           "anton1615",
 			GitHubRepository: "https://github.com/anton1615/cpa-plugin-alysis",
 			ConfigFields:     []pluginapi.ConfigField{},
