@@ -29,5 +29,5 @@ cp README.md LICENSE config.example.yaml "$STAGE/"
 
 (cd "$STAGE" && zip -q -r "$DIST_DIR/$NAME.zip" .)
 
-(cd "$DIST_DIR" && sha256sum "$NAME.zip" > checksums.txt)
+# checksums.txt is generated once for all archives by the release job.
 echo "packaged $DIST_DIR/$NAME.zip"
