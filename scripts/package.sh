@@ -9,6 +9,8 @@ LIBRARY="${3:?built library}"
 DIST_DIR="${4:?dist dir}"
 OS="${5:?os}"
 
+VERSION="${VERSION#v}"
+
 case "$OS" in
   linux) EXT="so" ;;
   darwin) EXT="dylib" ;;
@@ -17,6 +19,7 @@ case "$OS" in
 esac
 
 mkdir -p "$DIST_DIR"
+DIST_DIR="$(cd "$DIST_DIR" && pwd)"
 NAME="alysis_${VERSION}_${OS}_${ARCH}"
 STAGE="$(mktemp -d)"
 trap 'rm -rf "$STAGE"' EXIT
