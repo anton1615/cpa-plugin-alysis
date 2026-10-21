@@ -1,0 +1,26 @@
+# Example CLIProxyAPI configuration for the Alysis provider plugin.
+#
+# The plugin id is derived from the shared library file name, so the file must
+# be named "alysis.<ext>" inside the plugin directory.
+
+plugins:
+  enabled: true
+  dir: "/path/to/plugins"
+  configs:
+    alysis:
+      enabled: true
+      priority: 10
+      # Base URL of the deployment that hosts the account service.
+      # The model gateway is derived as <cloud_api_url>/llm/v1.
+      cloud_api_url: "https://<your-deployment>/functions/v1"
+
+# Credentials are read from the auth directory. One file per account:
+#
+#   {
+#     "type": "alysis",
+#     "api_key": "<gateway key>",
+#     "base_url": "<cloud_api_url>/llm/v1",
+#     "email": "<account email>"
+#   }
+#
+# The Management Center can also create the file through the device-code login.

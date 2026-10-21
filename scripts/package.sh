@@ -25,7 +25,7 @@ STAGE="$(mktemp -d)"
 trap 'rm -rf "$STAGE"' EXIT
 
 cp "$LIBRARY" "$STAGE/alysis.$EXT"
-cp README.md LICENSE "$STAGE/"
+cp README.md LICENSE config.example.yaml "$STAGE/"
 
 (cd "$STAGE" && zip -q -r "$DIST_DIR/$NAME.zip" .)
 
