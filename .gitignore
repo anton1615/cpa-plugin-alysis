@@ -1,0 +1,17 @@
+# Build output
+/build/
+/dist/
+*.so
+*.dylib
+*.dll
+*.h
+
+# Go
+*.test
+*.out
+*.exe
+
+# Editors / OS
+.DS_Store
+.idea/
+.vscode/
