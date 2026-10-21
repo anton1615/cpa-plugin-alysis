@@ -54,7 +54,7 @@ jobs:
       - name: Build
         run: |
           mkdir -p build
-          go build -trimpath -buildmode=c-shared -o "build/alysis.${{ matrix.os == 'windows' && 'dll' || 'so' }}" .
+          go build -trimpath -buildvcs=false -buildmode=c-shared -o "build/alysis.${{ matrix.os == 'windows' && 'dll' || 'so' }}" .
       - name: Test
         run: go test ./...
       - name: Package
