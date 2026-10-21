@@ -67,9 +67,43 @@ jobs:
           name: alysis-${{ matrix.os }}-${{ matrix.arch }}
           path: dist/*.zip
 
+  build-darwin:
+    name: Build darwin ${{ matrix.arch }}
+    runs-on: macos-14
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+          - arch: arm64
+    env:
+      CGO_ENABLED: '1'
+      GOOS: darwin
+      GOARCH: ${{ matrix.arch }}
+      GOTOOLCHAIN: local
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Build
+        run: |
+          mkdir -p build
+          go build -trimpath -buildvcs=false -buildmode=c-shared -o build/alysis.dylib .
+      - name: Package
+        run: |
+          bash scripts/package.sh "${{ github.ref_name }}" "${{ matrix.arch }}" \
+            build/alysis.dylib dist darwin
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: alysis-darwin-${{ matrix.arch }}
+          path: dist/*.zip
+
   release:
     name: Publish release
-    needs: build
+    needs: [build, build-darwin]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-24.04
     permissions:
