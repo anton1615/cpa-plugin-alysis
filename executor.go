@@ -94,49 +94,140 @@ func toUpstreamPayload(req executorRequest, protocol string) []byte {
 	if len(body) == 0 {
 		body = req.OriginalRequest
 	}
-	if len(body) == 0 || protocol == formatChat {
+	if len(body) == 0 {
 		return body
 	}
-	target := translator.FormatClaude
-	if protocol == formatResponses {
-		// The built-in registry has no chat -> openai-response transform; the
-		// codex transform produces the Responses shape the gateway accepts.
-		target = translator.FormatCodex
+	switch protocol {
+	case formatResponses:
+		if !translator.HasRequestTransformer(translator.FormatOpenAI, translator.FormatCodex) {
+			return body
+		}
+		converted := translator.TranslateRequest(translator.FormatOpenAI, translator.FormatCodex, req.Model, body, req.Stream)
+		return applyResponsesReasoning(converted, req.Model)
+	case formatMessages:
+		if !translator.HasRequestTransformer(translator.FormatOpenAI, translator.FormatClaude) {
+			return body
+		}
+		converted := translator.TranslateRequest(translator.FormatOpenAI, translator.FormatClaude, req.Model, body, req.Stream)
+		return normalizeClaudeThinking(converted, body, req.Model)
+	default:
+		return applyChatReasoning(body, req.Model)
 	}
-	if !translator.HasRequestTransformer(translator.FormatOpenAI, target) {
+}
+
+// requestEffort reads the reasoning effort a client asked for. The host
+// translates client protocols to chat, where the knob is a flat string.
+func requestEffort(body []byte) string {
+	var payload struct {
+		ReasoningEffort string `json:"reasoning_effort"`
+		Reasoning       struct {
+			Effort string `json:"effort"`
+		} `json:"reasoning"`
+	}
+	if err := json.Unmarshal(body, &payload); err != nil {
+		return ""
+	}
+	if effort := strings.ToLower(strings.TrimSpace(payload.ReasoningEffort)); effort != "" {
+		return effort
+	}
+	return strings.ToLower(strings.TrimSpace(payload.Reasoning.Effort))
+}
+
+// applyChatReasoning drops a flat reasoning_effort the model does not accept.
+// The gateway rejects unknown values (GLM answers "reasoning_effort must be
+// low, high, or max"), and the official client omits them the same way.
+func applyChatReasoning(body []byte, model string) []byte {
+	effort := requestEffort(body)
+	if effort == "" || effortAllowed(model, effort) {
 		return body
 	}
-	converted := translator.TranslateRequest(translator.FormatOpenAI, target, req.Model, body, req.Stream)
-	if target == translator.FormatClaude {
-		converted = normalizeClaudeThinking(converted, body)
+	var document map[string]json.RawMessage
+	if err := json.Unmarshal(body, &document); err != nil {
+		return body
 	}
-	return converted
+	delete(document, "reasoning_effort")
+	delete(document, "reasoning")
+	filtered, err := json.Marshal(document)
+	if err != nil {
+		return body
+	}
+	return filtered
+}
+
+// applyResponsesReasoning drops a reasoning object whose effort the model does
+// not accept ("Invalid Luna effort." on the hosted gateway).
+func applyResponsesReasoning(converted []byte, model string) []byte {
+	var document map[string]json.RawMessage
+	if err := json.Unmarshal(converted, &document); err != nil {
+		return converted
+	}
+	raw, ok := document["reasoning"]
+	if !ok {
+		return converted
+	}
+	var reasoning struct {
+		Effort string `json:"effort"`
+	}
+	if err := json.Unmarshal(raw, &reasoning); err != nil {
+		return converted
+	}
+	if reasoning.Effort == "" || effortAllowed(model, reasoning.Effort) {
+		return converted
+	}
+	delete(document, "reasoning")
+	filtered, err := json.Marshal(document)
+	if err != nil {
+		return converted
+	}
+	return filtered
 }
 
 // normalizeClaudeThinking rewrites the Claude thinking block into the mode the
 // hosted gateway accepts. The gateway rejects the legacy "enabled" mode and
 // only understands "adaptive"; the requested effort moves to output_config.
-func normalizeClaudeThinking(converted, original []byte) []byte {
+func normalizeClaudeThinking(converted, original []byte, model string) []byte {
 	var document map[string]json.RawMessage
 	if err := json.Unmarshal(converted, &document); err != nil {
 		return converted
 	}
-	raw, ok := document["thinking"]
-	if !ok {
-		return converted
-	}
-	var thinking map[string]any
-	if err := json.Unmarshal(raw, &thinking); err != nil {
-		return converted
-	}
-	if fmt.Sprint(thinking["type"]) != "enabled" {
-		return converted
-	}
-	delete(thinking, "budget_tokens")
-	thinking["type"] = "adaptive"
-	document["thinking"], _ = json.Marshal(thinking)
+	effort := requestEffort(original)
+	allowed := effort == "" || effortAllowed(model, effort)
 
-	if effort := reasoningEffort(original); effort != "" {
+	raw, hasThinking := document["thinking"]
+	thinking := map[string]any{}
+	if hasThinking {
+		if err := json.Unmarshal(raw, &thinking); err != nil {
+			return converted
+		}
+	}
+	if effort == "none" {
+		// Explicit disable is the documented off switch for these models.
+		thinking["type"] = "disabled"
+		delete(thinking, "budget_tokens")
+		document["thinking"], _ = json.Marshal(thinking)
+		delete(document, "output_config")
+		out, err := json.Marshal(document)
+		if err != nil {
+			return converted
+		}
+		return out
+	}
+	if !allowed {
+		// The model does not accept this effort: send nothing.
+		delete(document, "thinking")
+		delete(document, "output_config")
+		out, err := json.Marshal(document)
+		if err != nil {
+			return converted
+		}
+		return out
+	}
+	if fmt.Sprint(thinking["type"]) == "enabled" {
+		delete(thinking, "budget_tokens")
+		thinking["type"] = "adaptive"
+		document["thinking"], _ = json.Marshal(thinking)
+	}
+	if effort != "" {
 		var config map[string]any
 		if rawConfig, ok := document["output_config"]; ok {
 			_ = json.Unmarshal(rawConfig, &config)
@@ -147,26 +238,11 @@ func normalizeClaudeThinking(converted, original []byte) []byte {
 		config["effort"] = effort
 		document["output_config"], _ = json.Marshal(config)
 	}
-	normalized, err := json.Marshal(document)
+	out, err := json.Marshal(document)
 	if err != nil {
 		return converted
 	}
-	return normalized
-}
-
-// reasoningEffort reads the effort level from a chat payload.
-func reasoningEffort(body []byte) string {
-	var payload struct {
-		ReasoningEffort string `json:"reasoning_effort"`
-	}
-	if err := json.Unmarshal(body, &payload); err != nil {
-		return ""
-	}
-	switch effort := strings.ToLower(strings.TrimSpace(payload.ReasoningEffort)); effort {
-	case "low", "medium", "high":
-		return effort
-	}
-	return ""
+	return out
 }
 
 // fromUpstreamPayload converts an upstream non-streaming body into the

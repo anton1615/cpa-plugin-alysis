@@ -6,14 +6,18 @@ import (
 	"testing"
 )
 
-func TestNormalizeClaudeThinkingRewritesEnabledToAdaptive(t *testing.T) {
-	converted := []byte(`{"model":"claude-haiku-5-5","max_tokens":64,` +
+func claudeConverted(thinking string) []byte {
+	return []byte(`{"model":"claude-haiku-5-5","max_tokens":64,` +
 		`"messages":[{"role":"user","content":[{"type":"text","text":"hi"}]}],` +
-		`"thinking":{"type":"enabled","budget_tokens":24576},"stream":false}`)
+		`"thinking":` + thinking + `,"stream":false}`)
+}
+
+func TestNormalizeClaudeThinkingRewritesEnabledToAdaptive(t *testing.T) {
+	converted := claudeConverted(`{"type":"enabled","budget_tokens":24576}`)
 	original := []byte(`{"model":"claude-haiku-5-5","messages":[{"role":"user","content":"hi"}],` +
 		`"reasoning_effort":"high"}`)
 
-	out := normalizeClaudeThinking(converted, original)
+	out := normalizeClaudeThinking(converted, original, "claude-haiku-5-5")
 	var document map[string]any
 	if err := json.Unmarshal(out, &document); err != nil {
 		t.Fatalf("unmarshal: %v", err)
@@ -35,31 +39,78 @@ func TestNormalizeClaudeThinkingRewritesEnabledToAdaptive(t *testing.T) {
 }
 
 func TestNormalizeClaudeThinkingKeepsOtherModes(t *testing.T) {
-	converted := []byte(`{"thinking":{"type":"disabled"}}`)
-	out := normalizeClaudeThinking(converted, []byte(`{}`))
+	converted := claudeConverted(`{"type":"disabled"}`)
+	out := normalizeClaudeThinking(converted, []byte(`{}`), "claude-haiku-5-5")
 	if !strings.Contains(string(out), `"disabled"`) {
 		t.Fatalf("disabled mode must stay untouched: %s", out)
 	}
 }
 
+func TestNormalizeClaudeThinkingNoneDisables(t *testing.T) {
+	converted := claudeConverted(`{"type":"enabled","budget_tokens":24576}`)
+	original := []byte(`{"reasoning_effort":"none"}`)
+	out := normalizeClaudeThinking(converted, original, "claude-haiku-5-5")
+	if !strings.Contains(string(out), `"disabled"`) {
+		t.Fatalf("effort none must disable thinking: %s", out)
+	}
+}
+
+func TestNormalizeClaudeThinkingDropsUnsupportedEffort(t *testing.T) {
+	converted := claudeConverted(`{"type":"enabled","budget_tokens":24576}`)
+	original := []byte(`{"reasoning_effort":"bogus"}`)
+	out := normalizeClaudeThinking(converted, original, "claude-haiku-5-5")
+	if strings.Contains(string(out), "thinking") {
+		t.Fatalf("unsupported effort must not send a thinking block: %s", out)
+	}
+}
+
 func TestNormalizeClaudeThinkingWithoutThinkingBlock(t *testing.T) {
 	converted := []byte(`{"model":"claude-haiku-5-5"}`)
-	if got := string(normalizeClaudeThinking(converted, []byte(`{}`))); got != string(converted) {
+	if got := string(normalizeClaudeThinking(converted, []byte(`{}`), "claude-haiku-5-5")); got != string(converted) {
 		t.Fatalf("payload changed: %s", got)
 	}
 }
 
-func TestReasoningEffortAcceptsKnownLevels(t *testing.T) {
-	cases := map[string]string{
-		`{"reasoning_effort":"high"}`:    "high",
-		`{"reasoning_effort":"MEDIUM"}`:  "medium",
-		`{"reasoning_effort":"low"}`:     "low",
-		`{"reasoning_effort":"minimal"}`: "",
-		`{}`:                             "",
+func TestApplyChatReasoningDropsUnsupportedEffort(t *testing.T) {
+	body := []byte(`{"model":"glm-5.3-flash","messages":[],"reasoning_effort":"medium"}`)
+	out := applyChatReasoning(body, "glm-5.3-flash")
+	if strings.Contains(string(out), "reasoning_effort") {
+		t.Fatalf("unsupported effort must be dropped: %s", out)
 	}
-	for body, want := range cases {
-		if got := reasoningEffort([]byte(body)); got != want {
-			t.Fatalf("reasoningEffort(%s) = %q, want %q", body, got, want)
-		}
+	kept := applyChatReasoning([]byte(`{"model":"deepseek-flash","reasoning_effort":"high"}`), "deepseek-flash")
+	if !strings.Contains(string(kept), `"high"`) {
+		t.Fatalf("allowed effort must be kept: %s", kept)
+	}
+}
+
+func TestApplyChatReasoningKeepsAllowedEffort(t *testing.T) {
+	body := []byte(`{"model":"glm-5.3-flash","messages":[],"reasoning_effort":"max"}`)
+	out := applyChatReasoning(body, "glm-5.3-flash")
+	if !strings.Contains(string(out), `"max"`) {
+		t.Fatalf("allowed effort must be kept: %s", out)
+	}
+}
+
+func TestApplyResponsesReasoningDropsUnsupportedEffort(t *testing.T) {
+	converted := []byte(`{"model":"gpt-6-luna","input":"hi","reasoning":{"effort":"bogus"}}`)
+	out := applyResponsesReasoning(converted, "gpt-6-luna")
+	if strings.Contains(string(out), "reasoning") {
+		t.Fatalf("unsupported effort must be dropped: %s", out)
+	}
+	kept := applyResponsesReasoning([]byte(`{"model":"gpt-6-luna","reasoning":{"effort":"high"}}`), "gpt-6-luna")
+	if !strings.Contains(string(kept), `"high"`) {
+		t.Fatalf("allowed effort must be kept: %s", kept)
+	}
+}
+
+func TestRequestEffortReadsBothSpellings(t *testing.T) {
+	if got := requestEffort([]byte(`{"reasoning_effort":"high"}`)); got != "high" {
+		t.Fatalf("flat effort = %q", got)
+	}
+	if got := requestEffort([]byte(`{"reasoning":{"effort":"medium"}}`)); got != "medium" {
+		t.Fatalf("object effort = %q", got)
+	}
+	if got := requestEffort([]byte(`{}`)); got != "" {
+		t.Fatalf("absent effort = %q", got)
 	}
 }
