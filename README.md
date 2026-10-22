@@ -1,9 +1,13 @@
 # CLIProxyAPI Alysis Provider Plugin
 
 A native [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI) plugin that
-exposes the **Alysis Code** hosted models (`deepseek-flash`, `glm-5.3-flash`,
-`gpt-6-luna`, `claude-sonnet-5-5`, `claude-haiku-5-5`) to the host as a regular
-provider, together with a device-code login flow for the Management Center.
+exposes the **Alysis Code** hosted models to the host as a regular provider,
+together with a device-code login flow for the Management Center.
+
+The model catalog is discovered per account: the plugin asks the hosted gateway
+which models the account's plan serves and publishes exactly those. A typical
+free-tier account sees `deepseek-flash`, `glm-5.3-flash`, `gpt-6-luna` and
+`claude-haiku-5-5`; higher tiers may expose additional ones.
 
 The plugin is a single Go module with no vendored host source: it talks to the
 host over the public JSON/C ABI and uses the public `pluginapi` SDK package.

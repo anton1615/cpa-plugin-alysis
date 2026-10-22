@@ -144,8 +144,10 @@ func handleMethod(method string, request []byte) ([]byte, error) {
 	switch method {
 	case pluginabi.MethodPluginRegister, pluginabi.MethodPluginReconfigure:
 		return okEnvelopeResult(registration(request))
-	case pluginabi.MethodModelStatic, pluginabi.MethodModelForAuth:
+	case pluginabi.MethodModelStatic:
 		return okEnvelope(pluginapi.ModelResponse{Provider: providerID, Models: staticModels()})
+	case pluginabi.MethodModelForAuth:
+		return okEnvelope(modelsForAuth(request))
 	case pluginabi.MethodAuthIdentifier:
 		return okEnvelope(identifierResponse{Identifier: providerID})
 	case pluginabi.MethodAuthParse:

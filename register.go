@@ -28,7 +28,7 @@ func registration(request []byte) (registrationPayload, error) {
 		SchemaVersion: pluginabi.SchemaVersion,
 		Metadata: pluginapi.Metadata{
 			Name:             providerID,
-			Version:          "0.1.1",
+			Version:          "0.1.2",
 			Author:           "anton1615",
 			GitHubRepository: "https://github.com/anton1615/cpa-plugin-alysis",
 			ConfigFields:     []pluginapi.ConfigField{},
@@ -46,15 +46,25 @@ func registration(request []byte) (registrationPayload, error) {
 	}, nil
 }
 
-// staticModels is the catalog the hosted gateway serves today.
+// staticModels is the fallback catalog used when per-auth discovery fails.
+// Models that the hosted plan gates behind a higher tier are not listed here;
+// they appear once the account catalog reports them.
 func staticModels() []pluginapi.ModelInfo {
 	return []pluginapi.ModelInfo{
-		modelInfo("deepseek-flash", "DeepSeek V4.1 Flash"),
-		modelInfo("glm-5.3-flash", "GLM 5.3 Flash"),
-		modelInfo("gpt-6-luna", "GPT-6 Luna"),
-		modelInfo("claude-haiku-5-5", "Claude Haiku 5.5"),
-		modelInfo("claude-sonnet-5-5", "Claude Sonnet 5.5"),
+		modelInfo("deepseek-flash", modelDisplayNames["deepseek-flash"]),
+		modelInfo("glm-5.3-flash", modelDisplayNames["glm-5.3-flash"]),
+		modelInfo("gpt-6-luna", modelDisplayNames["gpt-6-luna"]),
+		modelInfo("claude-haiku-5-5", modelDisplayNames["claude-haiku-5-5"]),
 	}
+}
+
+// modelDisplayNames maps model ids to human readable labels.
+var modelDisplayNames = map[string]string{
+	"deepseek-flash":    "DeepSeek V4.1 Flash",
+	"glm-5.3-flash":     "GLM 5.3 Flash",
+	"gpt-6-luna":        "GPT-6 Luna",
+	"claude-sonnet-5-5": "Claude Sonnet 5.5",
+	"claude-haiku-5-5":  "Claude Haiku 5.5",
 }
 
 func modelInfo(id, display string) pluginapi.ModelInfo {
