@@ -60,8 +60,27 @@ MESSAGES_BODY = {
 }
 
 
+MODELS_BODY = {
+    "object": "list",
+    "data": [
+        {"id": "deepseek-flash", "object": "model", "owned_by": "alysis"},
+        {"id": "glm-5.3-flash", "object": "model", "owned_by": "alysis"},
+        {"id": "gpt-6-luna", "object": "model", "owned_by": "alysis"},
+        {"id": "claude-haiku-5-5", "object": "model", "owned_by": "alysis"},
+    ],
+}
+
+
 class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
+
+    def do_GET(self) -> None:  # noqa: N802 - stdlib naming
+        path = self.path.split("?", 1)[0]
+        self._record(path)
+        if path.endswith("/models"):
+            self._send(200, MODELS_BODY)
+        else:
+            self._send(404, {"error": {"message": f"unexpected path {path}"}})
 
     def _record(self, path: str) -> None:
         key = self.headers.get("Authorization", "")
