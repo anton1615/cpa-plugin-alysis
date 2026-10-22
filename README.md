@@ -16,7 +16,9 @@ host over the public JSON/C ABI and uses the public `pluginapi` SDK package.
 
 - **Model provider** — publishes the Alysis model catalog to `/v1/models`.
 - **Executor** — routes each model to the upstream endpoint family it expects:
-  chat-completions, Responses, or Messages.
+  chat-completions, Responses, or Messages. The plugin speaks chat to the
+  host; the host translates client protocols (Responses, Messages) to chat and
+  back.
 - **Device-code login** — the Management Center shows a device-code URL; the
   plugin requests the code, polls for approval, and hands a ready-to-use auth
   record back to the host, which persists it into the auth directory.

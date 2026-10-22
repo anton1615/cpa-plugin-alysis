@@ -28,7 +28,7 @@ func registration(request []byte) (registrationPayload, error) {
 		SchemaVersion: pluginabi.SchemaVersion,
 		Metadata: pluginapi.Metadata{
 			Name:             providerID,
-			Version:          "0.1.2",
+			Version:          "0.1.3",
 			Author:           "anton1615",
 			GitHubRepository: "https://github.com/anton1615/cpa-plugin-alysis",
 			ConfigFields:     []pluginapi.ConfigField{},
@@ -38,10 +38,12 @@ func registration(request []byte) (registrationPayload, error) {
 			AuthProvider:       true,
 			Executor:           true,
 			ExecutorModelScope: pluginapi.ExecutorModelScopeOAuth,
-			// Declaring all three lets the host hand requests over untranslated
-			// when the client already speaks the model's native protocol.
-			ExecutorInputFormats:  []string{formatChat, formatResponses, formatMessages},
-			ExecutorOutputFormats: []string{formatChat, formatResponses, formatMessages},
+			// Chat only: the host translates the client protocol (Responses or
+			// Messages) to chat and back. The plugin converts chat to the
+			// per-model upstream format itself, so accepting the client
+			// formats here would hand it payloads it cannot parse.
+			ExecutorInputFormats:  []string{formatChat},
+			ExecutorOutputFormats: []string{formatChat},
 		},
 	}, nil
 }
