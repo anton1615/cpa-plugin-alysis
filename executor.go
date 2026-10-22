@@ -106,7 +106,67 @@ func toUpstreamPayload(req executorRequest, protocol string) []byte {
 	if !translator.HasRequestTransformer(translator.FormatOpenAI, target) {
 		return body
 	}
-	return translator.TranslateRequest(translator.FormatOpenAI, target, req.Model, body, req.Stream)
+	converted := translator.TranslateRequest(translator.FormatOpenAI, target, req.Model, body, req.Stream)
+	if target == translator.FormatClaude {
+		converted = normalizeClaudeThinking(converted, body)
+	}
+	return converted
+}
+
+// normalizeClaudeThinking rewrites the Claude thinking block into the mode the
+// hosted gateway accepts. The gateway rejects the legacy "enabled" mode and
+// only understands "adaptive"; the requested effort moves to output_config.
+func normalizeClaudeThinking(converted, original []byte) []byte {
+	var document map[string]json.RawMessage
+	if err := json.Unmarshal(converted, &document); err != nil {
+		return converted
+	}
+	raw, ok := document["thinking"]
+	if !ok {
+		return converted
+	}
+	var thinking map[string]any
+	if err := json.Unmarshal(raw, &thinking); err != nil {
+		return converted
+	}
+	if fmt.Sprint(thinking["type"]) != "enabled" {
+		return converted
+	}
+	delete(thinking, "budget_tokens")
+	thinking["type"] = "adaptive"
+	document["thinking"], _ = json.Marshal(thinking)
+
+	if effort := reasoningEffort(original); effort != "" {
+		var config map[string]any
+		if rawConfig, ok := document["output_config"]; ok {
+			_ = json.Unmarshal(rawConfig, &config)
+		}
+		if config == nil {
+			config = map[string]any{}
+		}
+		config["effort"] = effort
+		document["output_config"], _ = json.Marshal(config)
+	}
+	normalized, err := json.Marshal(document)
+	if err != nil {
+		return converted
+	}
+	return normalized
+}
+
+// reasoningEffort reads the effort level from a chat payload.
+func reasoningEffort(body []byte) string {
+	var payload struct {
+		ReasoningEffort string `json:"reasoning_effort"`
+	}
+	if err := json.Unmarshal(body, &payload); err != nil {
+		return ""
+	}
+	switch effort := strings.ToLower(strings.TrimSpace(payload.ReasoningEffort)); effort {
+	case "low", "medium", "high":
+		return effort
+	}
+	return ""
 }
 
 // fromUpstreamPayload converts an upstream non-streaming body into the
