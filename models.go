@@ -27,6 +27,7 @@ func defaultFetchGatewayModels(baseURL, apiKey, proxyURL string) (int, []byte, e
 		return 0, nil, errRequest
 	}
 	request.Header.Set("Authorization", "Bearer "+apiKey)
+	applyCLIWebHeaders(request.Header)
 	resp, errDo := client.Do(request)
 	if errDo != nil {
 		return 0, nil, errDo

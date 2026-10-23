@@ -34,12 +34,16 @@ func upstreamRequest(req executorRequest) (authStorage, *http.Request, error) {
 	if err != nil {
 		return storage, nil, err
 	}
+	// Mirror the official CLI's httpx request shape so gateway-side client
+	// fingerprinting cannot tell this call from `alysis` traffic.
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("Authorization", "Bearer "+storage.APIKey)
-	if req.Stream {
-		httpReq.Header.Set("Accept", "text/event-stream")
-	} else {
-		httpReq.Header.Set("Accept", "application/json")
+	httpReq.Header.Set("User-Agent", "alysis-code/0.1.0")
+	httpReq.Header.Set("Accept", "*/*")
+	httpReq.Header.Set("Accept-Encoding", "identity")
+	httpReq.Header.Set("Connection", "keep-alive")
+	if protocol == formatMessages {
+		httpReq.Header.Set("anthropic-version", "2023-06-01")
 	}
 	return storage, httpReq, nil
 }
@@ -280,7 +284,6 @@ func executeStreamOne(req executorRequest) (http.Header, <-chan []byte, <-chan e
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	httpReq.Header.Set("Accept", "text/event-stream")
 	client, errClient := upstreamClient(storage.ProxyURL)
 	if errClient != nil {
 		return nil, nil, nil, errClient

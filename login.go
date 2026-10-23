@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"crypto/rand"
+	"crypto/sha1"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -64,6 +65,7 @@ var httpPostJSON = func(target string, body any, headers map[string]string) ([]b
 		return nil, 0, errNew
 	}
 	request.Header.Set("Content-Type", "application/json")
+	applyCLIWebHeaders(request.Header)
 	for key, value := range headers {
 		request.Header.Set(key, value)
 	}
@@ -83,7 +85,7 @@ var httpGetJSON = func(target, bearer string) ([]byte, int, error) {
 		return nil, 0, errNew
 	}
 	request.Header.Set("Authorization", "Bearer "+bearer)
-	request.Header.Set("Accept", "application/json")
+	applyCLIWebHeaders(request.Header)
 	response, errDo := (&http.Client{Timeout: 20 * time.Second}).Do(request)
 	if errDo != nil {
 		return nil, 0, errDo
@@ -154,14 +156,32 @@ func approvalURL(verificationURL, userCode string) string {
 	return target + separator + "code=" + url.QueryEscape(userCode)
 }
 
-// installationID is a stable client identity for the device-code request,
-// mirroring the CLI's installation_id role.
-func installationID() string {
+// hostname mirrors the CLI's platform.node() input to client_name.
+func hostname() string {
 	host, err := os.Hostname()
 	if err != nil || strings.TrimSpace(host) == "" {
-		host = "unknown-host"
+		return "unknown-host"
 	}
-	return "cliproxyapi-alysis@" + strings.ToLower(strings.TrimSpace(host))
+	return host
+}
+
+// installationID is a stable UUID-shaped client identity, mirroring the CLI's
+// get_installation_id role in the device-code request (the server treats it as
+// an opaque id; a non-UUID string would stand out in hosted account telemetry).
+func installationID() string {
+	sum := sha1.Sum([]byte("cliproxyapi-alysis:" + hostname()))
+	sum[6] = (sum[6] & 0x0f) | 0x50
+	sum[8] = (sum[8] & 0x3f) | 0x80
+	return fmt.Sprintf("%x-%x-%x-%x-%x", sum[0:4], sum[4:6], sum[6:8], sum[8:10], sum[10:16])
+}
+
+// deviceClientName mirrors the CLI's `f"alysis-cli @ {platform.node()}"[:80]`.
+func deviceClientName() string {
+	name := "alysis-cli @ " + hostname()
+	if len(name) > 80 {
+		return name[:80]
+	}
+	return name
 }
 
 // deviceGrantResponse mirrors the device-code endpoint payload.
@@ -184,7 +204,7 @@ func startLogin(_ []byte) (pluginapi.AuthLoginStartResponse, error) {
 		)
 	}
 	body, status, err := httpPostJSON(base+"/device-code", map[string]string{
-		"client_name":     installationID(),
+		"client_name":     deviceClientName(),
 		"installation_id": installationID(),
 	}, nil)
 	if err != nil {

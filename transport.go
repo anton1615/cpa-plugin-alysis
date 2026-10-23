@@ -1,6 +1,7 @@
 package main
 
 import (
+	"crypto/tls"
 	"fmt"
 	"net"
 	"net/http"
@@ -11,6 +12,15 @@ import (
 
 	"golang.org/x/net/proxy"
 )
+
+// applyCLIWebHeaders mimics stdlib urllib defaults. The official CLI calls the
+// cloud functions and gateway /models through urllib.request (not httpx), so
+// those requests carry this exact header trio.
+func applyCLIWebHeaders(h http.Header) {
+	h.Set("User-Agent", "python-urllib/3.13")
+	h.Set("Accept-Encoding", "identity")
+	h.Set("Connection", "close")
+}
 
 // upstreamClient builds the HTTP client used for all gateway traffic (model
 // discovery and executor calls). Transports are cached per proxy setting.
@@ -67,7 +77,6 @@ func transportFor(proxyURL string) (*http.Transport, error) {
 			return nil, fmt.Errorf("auth proxy_url: socks dialer lacks context support")
 		}
 		custom.DialContext = contextDialer.DialContext
-		custom.ForceAttemptHTTP2 = false
 	default:
 		return nil, fmt.Errorf("auth proxy_url: unsupported scheme %q", parsed.Scheme)
 	}
@@ -81,9 +90,12 @@ func defaultTransport(dialer *net.Dialer) *http.Transport {
 	if dialer == nil {
 		dialer = &net.Dialer{Timeout: 30 * time.Second, KeepAlive: 30 * time.Second}
 	}
+	// HTTP/1.1 only: the official CLI's httpx client never negotiates h2
+	// (http2=False default), so ALPN h2 would be a client fingerprint.
 	return &http.Transport{
 		DialContext:           dialer.DialContext,
-		ForceAttemptHTTP2:     true,
+		ForceAttemptHTTP2:     false,
+		TLSClientConfig:       &tls.Config{NextProtos: []string{"http/1.1"}},
 		MaxIdleConns:          8,
 		MaxIdleConnsPerHost:   2,
 		IdleConnTimeout:       90 * time.Second,

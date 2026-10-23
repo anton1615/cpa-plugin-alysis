@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -116,13 +117,14 @@ func TestUpstreamPathMatchesProtocol(t *testing.T) {
 
 func TestUpstreamRequestTargetsModelEndpoint(t *testing.T) {
 	cases := []struct {
-		model string
-		want  string
+		model       string
+		want        string
+		wantVersion string
 	}{
-		{"deepseek-flash", "https://x.test/v1/chat/completions"},
-		{"glm-5.3-flash", "https://x.test/v1/chat/completions"},
-		{"gpt-6-luna", "https://x.test/v1/responses"},
-		{"claude-haiku-5-5", "https://x.test/v1/messages"},
+		{"deepseek-flash", "https://x.test/v1/chat/completions", ""},
+		{"glm-5.3-flash", "https://x.test/v1/chat/completions", ""},
+		{"gpt-6-luna", "https://x.test/v1/responses", ""},
+		{"claude-haiku-5-5", "https://x.test/v1/messages", "2023-06-01"},
 	}
 	for _, tc := range cases {
 		req := executorRequest{
@@ -139,6 +141,18 @@ func TestUpstreamRequestTargetsModelEndpoint(t *testing.T) {
 		}
 		if got := httpReq.Header.Get("Authorization"); got != "Bearer slk_x" {
 			t.Errorf("%s: authorization = %q", tc.model, got)
+		}
+		if got := httpReq.Header.Get("User-Agent"); got != "alysis-code/0.1.0" {
+			t.Errorf("%s: user-agent = %q", tc.model, got)
+		}
+		if got := httpReq.Header.Get("Accept"); got != "*/*" {
+			t.Errorf("%s: accept = %q", tc.model, got)
+		}
+		if got := httpReq.Header.Get("Accept-Encoding"); got != "identity" {
+			t.Errorf("%s: accept-encoding = %q", tc.model, got)
+		}
+		if got := httpReq.Header.Get("anthropic-version"); got != tc.wantVersion {
+			t.Errorf("%s: anthropic-version = %q, want %q", tc.model, got, tc.wantVersion)
 		}
 	}
 }
@@ -243,4 +257,19 @@ func asStatusCoder(err error, target *interface{ StatusCode() int }) bool {
 		return true
 	}
 	return false
+}
+
+func TestDeviceCodeIdentityMirrorsCLI(t *testing.T) {
+	uuidPattern := regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-5[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
+	id := installationID()
+	if !uuidPattern.MatchString(id) {
+		t.Errorf("installationID = %q, want UUID-shaped id", id)
+	}
+	if id != installationID() {
+		t.Errorf("installationID is not stable across calls")
+	}
+	name := deviceClientName()
+	if !strings.HasPrefix(name, "alysis-cli @ ") || len(name) > 80 {
+		t.Errorf("deviceClientName = %q, want analysis-cli @ host within 80 bytes", name)
+	}
 }
