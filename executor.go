@@ -407,6 +407,13 @@ func trimSpaceBytes(raw []byte) []byte { return bytes.TrimSpace(raw) }
 // upstreamError mirrors an upstream HTTP failure so the host surfaces the real
 // status (401 invalid_api_key, 429 quota, ...) and can rotate to another auth.
 func upstreamError(status int, body []byte) error {
+	// Flagged Alysis accounts answer 409 "Hosted billing requires review".
+	// The host treats 409 as a request fault (no failover, no cooldown), so
+	// report it as 402 to rotate credentials and cool the account down.
+	if status == http.StatusConflict &&
+		strings.Contains(strings.ToLower(string(body)), "billing requires review") {
+		status = http.StatusPaymentRequired
+	}
 	return &statusError{status: status, message: upstreamMessage(status, body)}
 }
 

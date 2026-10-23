@@ -26,7 +26,10 @@ host over the public JSON/C ABI and uses the public `pluginapi` SDK package.
   directory, so credentials can also be imported by hand.
 - **Credential rotation** — an upstream `401 invalid_api_key` is reported with a
   `401` status, so the host rotates to another credential instead of disabling
-  the file.
+  the file. A `409` whose body carries `Hosted billing requires review` is
+  reported as `402 Payment Required`: the host treats a plain `409` as a client
+  request fault (no failover, no cooldown), while `402` always makes it try the
+  next credential and cool the flagged account down.
 
 ## Build
 

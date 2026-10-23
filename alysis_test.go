@@ -229,6 +229,31 @@ func TestUpstreamErrorCarriesStatusCode(t *testing.T) {
 	}
 }
 
+func TestUpstreamErrorMapsBillingReviewConflictToPaymentRequired(t *testing.T) {
+	err := upstreamError(409, []byte(`{"error":{"message":"Hosted billing requires review. Use your own API key meanwhile."}}`))
+	var sc interface{ StatusCode() int }
+	if !asStatusCoder(err, &sc) {
+		t.Fatal("upstream error does not expose StatusCode")
+	}
+	if sc.StatusCode() != 402 {
+		t.Fatalf("status = %d, want 402", sc.StatusCode())
+	}
+	if !strings.Contains(err.Error(), "billing requires review") {
+		t.Fatalf("message = %q", err.Error())
+	}
+}
+
+func TestUpstreamErrorKeepsOtherConflicts(t *testing.T) {
+	err := upstreamError(409, []byte(`{"error":{"message":"some other conflict"}}`))
+	var sc interface{ StatusCode() int }
+	if !asStatusCoder(err, &sc) {
+		t.Fatal("upstream error does not expose StatusCode")
+	}
+	if sc.StatusCode() != 409 {
+		t.Fatalf("status = %d, want 409", sc.StatusCode())
+	}
+}
+
 func TestStaticModelsCoverTheHostedCatalog(t *testing.T) {
 	want := map[string]bool{
 		"deepseek-flash":   false,
