@@ -7,7 +7,7 @@ import (
 
 func TestModelsForAuthUsesAccountCatalog(t *testing.T) {
 	previous := fetchGatewayModels
-	fetchGatewayModels = func(baseURL, apiKey string) (int, []byte, error) {
+	fetchGatewayModels = func(baseURL, apiKey, proxyURL string) (int, []byte, error) {
 		if baseURL != "https://example.test/llm/v1" {
 			t.Errorf("base url = %q", baseURL)
 		}
@@ -40,7 +40,7 @@ func TestModelsForAuthUsesAccountCatalog(t *testing.T) {
 
 func TestModelsForAuthFallsBackToStaticCatalog(t *testing.T) {
 	previous := fetchGatewayModels
-	fetchGatewayModels = func(string, string) (int, []byte, error) {
+	fetchGatewayModels = func(string, string, string) (int, []byte, error) {
 		return 403, []byte(`{"error":"not allowed"}`), nil
 	}
 	defer func() { fetchGatewayModels = previous }()

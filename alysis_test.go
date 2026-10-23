@@ -130,14 +130,14 @@ func TestUpstreamRequestTargetsModelEndpoint(t *testing.T) {
 			Payload:     []byte(`{"model":"` + tc.model + `","messages":[{"role":"user","content":"hi"}]}`),
 			StorageJSON: []byte(`{"type":"alysis","api_key":"slk_x","base_url":"https://x.test/v1"}`),
 		}
-		httpReq, _, err := upstreamRequest(req)
+		_, httpReq, err := upstreamRequest(req)
 		if err != nil {
 			t.Fatalf("%s: %v", tc.model, err)
 		}
-		if httpReq.URL != tc.want {
-			t.Errorf("%s: url = %q, want %q", tc.model, httpReq.URL, tc.want)
+		if got := httpReq.URL.String(); got != tc.want {
+			t.Errorf("%s: url = %q, want %q", tc.model, got, tc.want)
 		}
-		if got := httpReq.Headers.Get("Authorization"); got != "Bearer slk_x" {
+		if got := httpReq.Header.Get("Authorization"); got != "Bearer slk_x" {
 			t.Errorf("%s: authorization = %q", tc.model, got)
 		}
 	}

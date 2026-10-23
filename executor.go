@@ -2,89 +2,46 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/router-for-me/CLIProxyAPI/v8/sdk/pluginapi"
 	"github.com/router-for-me/CLIProxyAPI/v8/sdk/translator"
 	_ "github.com/router-for-me/CLIProxyAPI/v8/sdk/translator/builtin"
 )
 
-// hostHTTPRequest mirrors the host.http.do / host.http.do_stream payload.
-type hostHTTPRequest struct {
-	HostCallbackID string      `json:"host_callback_id,omitempty"`
-	Method         string      `json:"method,omitempty"`
-	URL            string      `json:"url,omitempty"`
-	Headers        http.Header `json:"headers,omitempty"`
-	Body           []byte      `json:"body,omitempty"`
-}
-
-// hostHTTPResponse mirrors the host.http.do result.
-type hostHTTPResponse struct {
-	StatusCode int         `json:"StatusCode"`
-	Headers    http.Header `json:"Headers"`
-	Body       []byte      `json:"Body"`
-}
-
-// hostHTTPStreamResponse mirrors the host.http.do_stream result. The host
-// marshals its own rpcHostHTTPStreamResponse here, so the tags are snake_case
-// rather than the Go field names host.http.do uses.
-type hostHTTPStreamResponse struct {
-	StatusCode int         `json:"status_code"`
-	Headers    http.Header `json:"headers"`
-	StreamID   string      `json:"stream_id,omitempty"`
-}
-
-// hostHTTPStreamChunk mirrors the host.http.stream_read result.
-type hostHTTPStreamChunk struct {
-	Payload []byte `json:"payload,omitempty"`
-	Error   string `json:"error,omitempty"`
-	Done    bool   `json:"done,omitempty"`
-}
-
-// callHost invokes one host callback and decodes its result into out.
-func callHost(method string, payload any, out any) error {
-	raw, err := json.Marshal(payload)
-	if err != nil {
-		return err
-	}
-	result, err := callHostRaw(method, raw)
-	if err != nil {
-		return err
-	}
-	if out == nil || len(result) == 0 {
-		return nil
-	}
-	return json.Unmarshal(result, out)
-}
-
 // upstreamRequest builds the HTTP call for one executor request. The payload is
 // converted from the client's chat-completions shape into the model's native
 // upstream shape, because the hosted gateway rejects chat-completions for the
 // Responses and Messages models.
-func upstreamRequest(req executorRequest) (hostHTTPRequest, authStorage, error) {
+func upstreamRequest(req executorRequest) (authStorage, *http.Request, error) {
 	storage, err := parseAuthStorage(req.StorageJSON)
 	if err != nil {
-		return hostHTTPRequest{}, storage, err
+		return storage, nil, err
 	}
 	protocol := modelProtocol(req.Model)
-	headers := http.Header{}
-	headers.Set("Content-Type", "application/json")
-	headers.Set("Authorization", "Bearer "+storage.APIKey)
-	if req.Stream {
-		headers.Set("Accept", "text/event-stream")
-	} else {
-		headers.Set("Accept", "application/json")
-	}
 	body := toUpstreamPayload(req, protocol)
-	return hostHTTPRequest{
-		Method:  http.MethodPost,
-		URL:     storage.BaseURL + upstreamPath(protocol),
-		Headers: headers,
-		Body:    body,
-	}, storage, nil
+	httpReq, err := http.NewRequest(
+		http.MethodPost,
+		storage.BaseURL+upstreamPath(protocol),
+		bytes.NewReader(body),
+	)
+	if err != nil {
+		return storage, nil, err
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("Authorization", "Bearer "+storage.APIKey)
+	if req.Stream {
+		httpReq.Header.Set("Accept", "text/event-stream")
+	} else {
+		httpReq.Header.Set("Accept", "application/json")
+	}
+	return storage, httpReq, nil
 }
 
 // toUpstreamPayload converts the host-provided chat-completions payload into the
@@ -290,35 +247,52 @@ func wrapResponsesTerminal(body []byte) []byte {
 // executeOne performs a non-streaming upstream call and converts the reply back
 // to chat-completions.
 func executeOne(req executorRequest) ([]byte, http.Header, error) {
-	httpReq, _, err := upstreamRequest(req)
+	storage, httpReq, err := upstreamRequest(req)
 	if err != nil {
 		return nil, nil, err
 	}
-	var resp hostHTTPResponse
-	if err := callHost("host.http.do", httpReq, &resp); err != nil {
-		return nil, nil, fmt.Errorf("upstream request failed: %w", err)
+	client, errClient := upstreamClient(storage.ProxyURL)
+	if errClient != nil {
+		return nil, nil, errClient
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+	resp, errDo := client.Do(httpReq.WithContext(ctx))
+	if errDo != nil {
+		return nil, nil, fmt.Errorf("upstream request failed: %w", errDo)
+	}
+	defer resp.Body.Close()
+	body, errRead := io.ReadAll(resp.Body)
+	if errRead != nil {
+		return nil, nil, fmt.Errorf("upstream body read failed: %w", errRead)
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, nil, upstreamError(resp.StatusCode, resp.Body)
+		return nil, nil, upstreamError(resp.StatusCode, body)
 	}
-	return fromUpstreamPayload(req, modelProtocol(req.Model), resp.Body), resp.Headers, nil
+	return fromUpstreamPayload(req, modelProtocol(req.Model), body), resp.Header, nil
 }
 
 // executeStreamOne performs a streaming upstream call and relays SSE frames as
-// chat-completions SSE.
+// chat-completions SSE. Unlike executeOne there is no total timeout: reasoning
+// streams idle for minutes while upstream chunks keep flowing.
 func executeStreamOne(req executorRequest) (http.Header, <-chan []byte, <-chan error, error) {
-	httpReq, _, err := upstreamRequest(req)
+	storage, httpReq, err := upstreamRequest(req)
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	httpReq.Headers.Set("Accept", "text/event-stream")
-	var stream hostHTTPStreamResponse
-	if err := callHost("host.http.do_stream", httpReq, &stream); err != nil {
-		return nil, nil, nil, fmt.Errorf("upstream stream failed: %w", err)
+	httpReq.Header.Set("Accept", "text/event-stream")
+	client, errClient := upstreamClient(storage.ProxyURL)
+	if errClient != nil {
+		return nil, nil, nil, errClient
 	}
-	if stream.StatusCode < 200 || stream.StatusCode >= 300 {
-		body := drainHostStream(stream.StreamID)
-		return nil, nil, nil, upstreamError(stream.StatusCode, body)
+	resp, errDo := client.Do(httpReq)
+	if errDo != nil {
+		return nil, nil, nil, fmt.Errorf("upstream stream failed: %w", errDo)
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+		resp.Body.Close()
+		return nil, nil, nil, upstreamError(resp.StatusCode, body)
 	}
 
 	protocol := modelProtocol(req.Model)
@@ -333,7 +307,7 @@ func executeStreamOne(req executorRequest) (http.Header, <-chan []byte, <-chan e
 	go func() {
 		defer close(payloads)
 		defer close(errs)
-		defer closeHostStream(stream.StreamID)
+		defer resp.Body.Close()
 
 		var buffer []byte
 		var param any
@@ -361,65 +335,36 @@ func executeStreamOne(req executorRequest) (http.Header, <-chan []byte, <-chan e
 			return true
 		}
 
+		chunk := make([]byte, 16*1024)
 		for {
-			var chunk hostHTTPStreamChunk
-			if err := callHost("host.http.stream_read", map[string]string{"stream_id": stream.StreamID}, &chunk); err != nil {
-				errs <- err
-				return
-			}
-			if chunk.Error != "" {
-				errs <- fmt.Errorf("%s", chunk.Error)
-				return
-			}
-			buffer = append(buffer, chunk.Payload...)
-			for {
-				index := bytes.Index(buffer, eventBreak)
-				if index < 0 {
-					break
+			n, errRead := resp.Body.Read(chunk)
+			if n > 0 {
+				buffer = append(buffer, chunk[:n]...)
+				for {
+					index := bytes.Index(buffer, eventBreak)
+					if index < 0 {
+						break
+					}
+					event := buffer[:index+len(eventBreak)]
+					buffer = buffer[index+len(eventBreak):]
+					if !emitEvent(event) {
+						return
+					}
 				}
-				event := buffer[:index+len(eventBreak)]
-				buffer = buffer[index+len(eventBreak):]
-				if !emitEvent(event) {
+			}
+			if errRead != nil {
+				if errRead == io.EOF {
+					if len(trimSpaceBytes(buffer)) > 0 {
+						emitEvent(append(append([]byte(nil), buffer...), '\n', '\n'))
+					}
 					return
 				}
-			}
-			if chunk.Done {
-				if len(trimSpaceBytes(buffer)) > 0 {
-					emitEvent(append(append([]byte(nil), buffer...), '\n', '\n'))
-				}
+				errs <- fmt.Errorf("upstream stream read failed: %w", errRead)
 				return
 			}
 		}
 	}()
-	return stream.Headers, payloads, errs, nil
-}
-
-func closeHostStream(streamID string) {
-	if streamID == "" {
-		return
-	}
-	_ = callHost("host.http.stream_close", map[string]string{"stream_id": streamID}, nil)
-}
-
-// drainHostStream collects a failed stream body so the error message carries the
-// upstream explanation.
-func drainHostStream(streamID string) []byte {
-	if streamID == "" {
-		return nil
-	}
-	var collected []byte
-	for {
-		var chunk hostHTTPStreamChunk
-		if err := callHost("host.http.stream_read", map[string]string{"stream_id": streamID}, &chunk); err != nil {
-			break
-		}
-		collected = append(collected, chunk.Payload...)
-		if chunk.Error != "" || chunk.Done {
-			break
-		}
-	}
-	closeHostStream(streamID)
-	return collected
+	return resp.Header, payloads, errs, nil
 }
 
 // eventBreak terminates one SSE event.

@@ -1,9 +1,12 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/router-for-me/CLIProxyAPI/v8/sdk/pluginapi"
 )
@@ -12,17 +15,28 @@ import (
 // Indirected so tests can replace the transport.
 var fetchGatewayModels = defaultFetchGatewayModels
 
-func defaultFetchGatewayModels(baseURL, apiKey string) (int, []byte, error) {
-	request := hostHTTPRequest{
-		Method:  "GET",
-		URL:     baseURL + "/models",
-		Headers: http.Header{"Authorization": []string{"Bearer " + apiKey}},
+func defaultFetchGatewayModels(baseURL, apiKey, proxyURL string) (int, []byte, error) {
+	client, errClient := upstreamClient(proxyURL)
+	if errClient != nil {
+		return 0, nil, errClient
 	}
-	var response hostHTTPResponse
-	if err := callHost("host.http.do", request, &response); err != nil {
-		return 0, nil, err
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	request, errRequest := http.NewRequestWithContext(ctx, http.MethodGet, baseURL+"/models", nil)
+	if errRequest != nil {
+		return 0, nil, errRequest
 	}
-	return response.StatusCode, response.Body, nil
+	request.Header.Set("Authorization", "Bearer "+apiKey)
+	resp, errDo := client.Do(request)
+	if errDo != nil {
+		return 0, nil, errDo
+	}
+	defer resp.Body.Close()
+	body, errRead := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if errRead != nil {
+		return 0, nil, errRead
+	}
+	return resp.StatusCode, body, nil
 }
 
 // modelsForAuth publishes the models the account's hosted plan really serves.
@@ -40,7 +54,7 @@ func modelsForAuth(request []byte) pluginapi.ModelResponse {
 	if err != nil {
 		return fallback
 	}
-	status, body, err := fetchGatewayModels(storage.BaseURL, storage.APIKey)
+	status, body, err := fetchGatewayModels(storage.BaseURL, storage.APIKey, storage.ProxyURL)
 	if err != nil || status < 200 || status >= 300 {
 		return fallback
 	}

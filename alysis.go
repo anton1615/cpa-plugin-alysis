@@ -57,6 +57,9 @@ type authStorage struct {
 	BaseURL string `json:"base_url"`
 	Email   string `json:"email,omitempty"`
 	Label   string `json:"label,omitempty"`
+	// ProxyURL routes the plugin's own gateway calls: "direct" or empty dials
+	// the gateway directly, any other value is a http(s)/socks5 proxy URL.
+	ProxyURL string `json:"proxy_url,omitempty"`
 }
 
 func parseAuthStorage(raw []byte) (authStorage, error) {
