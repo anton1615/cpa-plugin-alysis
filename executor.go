@@ -72,8 +72,145 @@ func toUpstreamPayload(req executorRequest, protocol string) []byte {
 		converted := translator.TranslateRequest(translator.FormatOpenAI, translator.FormatClaude, req.Model, body, req.Stream)
 		return normalizeClaudeThinking(converted, body, req.Model)
 	default:
-		return applyChatReasoning(body, req.Model)
+		return normalizeChatImages(applyChatReasoning(body, req.Model))
 	}
+}
+
+// normalizeChatImages moves image parts out of non-user messages into one
+// trailing user message. The hosted gateway accepts an image only inside a user
+// message ("Images require a user message and a vision-capable model"), while
+// clients such as tool-calling agents attach tool-result pixels to the tool
+// message. Bytes already present in a user message are dropped instead of sent
+// twice.
+func normalizeChatImages(body []byte) []byte {
+	var document map[string]json.RawMessage
+	if err := json.Unmarshal(body, &document); err != nil {
+		return body
+	}
+	raw, ok := document["messages"]
+	if !ok {
+		return body
+	}
+	var messages []json.RawMessage
+	if err := json.Unmarshal(raw, &messages); err != nil {
+		return body
+	}
+	userImages := map[string]bool{}
+	for _, message := range messages {
+		role, parts := chatMessage(message)
+		if role != "user" {
+			continue
+		}
+		for _, part := range parts {
+			if url := chatImageURL(part); url != "" {
+				userImages[url] = true
+			}
+		}
+	}
+	moved := false
+	var hoisted []json.RawMessage
+	for index, message := range messages {
+		role, parts := chatMessage(message)
+		if role == "user" || len(parts) == 0 {
+			continue
+		}
+		kept := make([]json.RawMessage, 0, len(parts))
+		for _, part := range parts {
+			url := chatImageURL(part)
+			if url == "" {
+				kept = append(kept, part)
+				continue
+			}
+			moved = true
+			if !userImages[url] {
+				userImages[url] = true
+				hoisted = append(hoisted, part)
+			}
+		}
+		if len(kept) == len(parts) {
+			continue
+		}
+		rewritten, err := setChatContent(message, kept)
+		if err != nil {
+			return body
+		}
+		messages[index] = rewritten
+	}
+	if !moved {
+		return body
+	}
+	if len(hoisted) > 0 {
+		parts := append(hoisted, json.RawMessage(`{"type":"text","text":"[Image from a tool result]"}`))
+		content, err := json.Marshal(parts)
+		if err != nil {
+			return body
+		}
+		appended, err := json.Marshal(map[string]json.RawMessage{
+			"role":    json.RawMessage(`"user"`),
+			"content": content,
+		})
+		if err != nil {
+			return body
+		}
+		messages = append(messages, appended)
+	}
+	encoded, err := json.Marshal(messages)
+	if err != nil {
+		return body
+	}
+	document["messages"] = encoded
+	rewritten, err := json.Marshal(document)
+	if err != nil {
+		return body
+	}
+	return rewritten
+}
+
+// chatMessage returns one message's role and content parts. Plain string
+// content yields no parts, so callers can skip it.
+func chatMessage(raw json.RawMessage) (string, []json.RawMessage) {
+	var message struct {
+		Role    string            `json:"role"`
+		Content []json.RawMessage `json:"content"`
+	}
+	if err := json.Unmarshal(raw, &message); err != nil {
+		return "", nil
+	}
+	return message.Role, message.Content
+}
+
+// chatImageURL returns the URL of an image part, or "" for any other part.
+func chatImageURL(part json.RawMessage) string {
+	var image struct {
+		Type     string `json:"type"`
+		ImageURL struct {
+			URL string `json:"url"`
+		} `json:"image_url"`
+	}
+	if err := json.Unmarshal(part, &image); err != nil || image.Type != "image_url" {
+		return ""
+	}
+	return image.ImageURL.URL
+}
+
+// setChatContent rewrites one message's content array, keeping every other
+// field untouched. An emptied content becomes "" because a tool message with a
+// null content is rejected upstream.
+func setChatContent(raw json.RawMessage, parts []json.RawMessage) (json.RawMessage, error) {
+	var message map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &message); err != nil {
+		return raw, err
+	}
+	if len(parts) == 0 {
+		message["content"] = json.RawMessage(`""`)
+	} else {
+		content, err := json.Marshal(parts)
+		if err != nil {
+			return raw, err
+		}
+		message["content"] = content
+	}
+	return json.Marshal(message)
 }
 
 // requestEffort reads the reasoning effort a client asked for. The host

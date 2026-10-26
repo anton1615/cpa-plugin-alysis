@@ -24,6 +24,14 @@ host over the public JSON/C ABI and uses the public `pluginapi` SDK package.
   record back to the host, which persists it into the auth directory.
 - **Auth file parser** — reads existing Alysis auth JSON files from the auth
   directory, so credentials can also be imported by hand.
+- **Image inputs** — the hosted gateway accepts an image only inside a *user*
+  message (`Images require a user message and a vision-capable model`), while
+  tool-calling clients attach tool-result pixels to the tool message. Chat
+  payloads are therefore normalized: an image in a non-user message moves into
+  a trailing user message, and is dropped when a user message already carries
+  the same bytes. Only `deepseek-flash` is vision-capable today; the other
+  models answer `Hosted Luna currently accepts text only` or
+  `Unsupported hosted Sonnet content block`.
 - **Credential rotation** — an upstream `401 invalid_api_key` is reported with a
   `401` status, so the host rotates to another credential instead of disabling
   the file. A `409` whose body carries `Hosted billing requires review` is
